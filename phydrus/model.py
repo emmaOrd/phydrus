@@ -105,15 +105,18 @@ class Model:
             "lWDep": False,
             "lScreen": print_screen,
             "AtmInf": False,
+            "lVariabBC": False,
             "lEquil": True,
             "lInverse": False,
             "lSnow": False,
             "lHP1": False,
             "lMeteo": False,
             "lVapor": False,
-            "lActRSU": False,
-            "lFlux": False,
+            "lActiveU": False,
+            "lFluxes": False,
             "lIrrig": False,
+            "lPart": False,
+            "lCosmic": False,
             "CosAlfa": 1,
         }
 
@@ -366,7 +369,7 @@ class Model:
                 "TopInf": True,
                 "WLayer": False,
                 "KodTop": -1,
-                "lInitW": linitw,
+                "InitCond": linitw,
                 "top_bc": top_bc,
                 "bot_bc": bot_bc,
                 "BotInf": False,
@@ -374,7 +377,7 @@ class Model:
                 "FreeD": False,
                 "SeepF": False,
                 "KodBot": -1,  # Depends on boundary condition
-                "qDrain": False,
+                "DrainF": False,
                 "hSeep": hseep,  # [L]
                 "rTop": rtop,  # [LT-1]
                 "rBot": rbot,  # [LT-1]
@@ -382,10 +385,10 @@ class Model:
                 "GWL0L": gw_level,  # [L]
                 "Aqh": aqh,  # [LT-1]
                 "Bqh": bqh,  # [L-1]
-                "ha": ha,  # [L]
-                "hb": hb,  # [L]
-                "iModel": model,
-                "iHyst": hysteresis,
+                "hTab1": ha,  # [L]
+                "hTabN": hb,  # [L]
+                "Model": model,
+                "Hysteresis": hysteresis,
                 "iKappa": ikappa,
             }
 
@@ -465,11 +468,12 @@ class Model:
         """
         if self.atmosphere_info is None:
             self.atmosphere_info = {
-                "lDailyVar": ldailyvar,
-                "lSinusVar": lsinusvar,
-                "lLai": llai,
+                "DailyVar": ldailyvar,
+                "SinusVar": lsinusvar,
+                "lLay": llai,
                 "lBCCycles": False,
                 "lInterc": False,
+                "lHeadInt": False,
                 "lExtinct": rextinct,
                 "hCritS": hcrits,
             }
@@ -677,8 +681,10 @@ class Model:
 
     def add_solute_transport(self, model=0, epsi=0.5, lupw=False, lartd=False,
                              ltdep=False, ctola=0, ctolr=0, maxit=0, pecr=2,
-                             ltort=True, lwatdep=False, top_bc=-1, bot_bc=0,
+                             ltort=True, lwatdep=False, lHP1BC=False, lFumigant=False, 
+                             lPFAS=False, lSurfact = False, lCFTr= False, top_bc=-1, bot_bc=0,
                              dsurf=None, catm=None, tpulse=1):
+        
         """
         Method to add solute transport to the model.
 
@@ -737,6 +743,11 @@ class Model:
         lwatdep: bool, optional
             True if at least one degradation coefficient (ChPar) is water
             content dependent.
+        lHP1BC: bool
+        lFumigant: bool
+        lPFAS: bool
+        lSurfact: bool
+        lCFTr: bool
         top_bc: int, optional
             Code which specifies the type of upper boundary condition
             1 = Dirichlet boundary condition,
@@ -789,7 +800,12 @@ class Model:
                 "kBotCh": bot_bc,
                 "dSurf": dsurf,
                 "cAtm": catm,
-                "tPulse": tpulse
+                "tPulse": tpulse,
+                "lHP1BC": lHP1BC,  
+                "lFumigant": lFumigant, 
+                "lPFAS": lPFAS,
+                "lSurfact": lSurfact,
+                "lCFTr":lCFTr
             }
             self.basic_info["lChem"] = True
         else:
@@ -935,7 +951,7 @@ class Model:
         """
 
         self.time_info = {"dt": dt, "dtMin": dtmin, "dtMax": dtmax,
-                          "dMul": 1.3, "dMul2": 0.7, "ItMin": 3, "ItMax": 7,
+                          "DMul": 1.3, "DMul2": 0.7, "ItMin": 3, "ItMax": 7,
                           "MPL": None, "tInit": tinit, "tMax": tmax,
                           "lPrint": print_times, "nPrintSteps": 1,
                           "tPrintInterval": 1, "lEnter": False,
@@ -964,7 +980,7 @@ class Model:
                 if printmax is None:
                     printmax = tmax
                 if nsteps is None:
-                    times = arange(printinit, printmax, step=dtprint)
+                    times = arange(printinit, printmax+1, step=dtprint)
                 else:
                     times = linspace(printinit, printmax, num=nsteps + 1)
                 if printinit == tinit:
@@ -977,7 +993,7 @@ class Model:
                 self.times = [self.time_info["tMax"]]
         return self.times
 
-    def simulate(self):
+    def simulate(self, silent=False):
         """Method to call the Hydrus-1D executable."""
         # Remove old Error.msg file
         if os.path.exists(os.path.join(self.ws_name, "Error.msg")):
@@ -987,28 +1003,29 @@ class Model:
         # Run Hydrus executable.
         cmd = [self.exe_name, self.ws_name, "-1"]
         result = run(cmd)
-
-        # Provide the user with some feedback about the simulation
-        if result.returncode == 0:
-            self.logger.info("Hydrus-1D Simulation Successful.")
-        else:
-            self.logger.warning("Hydrus-1D Simulation Unsuccessful.")
+        
+        if silent == False:
+            # Provide the user with some feedback about the simulation
+            if result.returncode == 0:
+                self.logger.info("Hydrus-1D Simulation Successful.")
+            else:
+                self.logger.warning("Hydrus-1D Simulation Unsuccessful.")
 
         return result
 
-    def write_input(self):
+    def write_input(self, silent=False):
         """Method to write the input files for the HYDRUS-1D simulation."""
         # 1. Write SELECTOR.IN
-        self.write_selector()
+        self.write_selector(silent=silent)
 
         # 2. Write PROFILE.DAT
-        self.write_profile()
+        self.write_profile(silent=silent)
 
         # 3. Write ATMOSPH.IN
         if self.basic_info["AtmInf"]:
-            self.write_atmosphere()
+            self.write_atmosphere(silent=silent)
 
-    def write_selector(self, fname="SELECTOR.IN"):
+    def write_selector(self, fname="SELECTOR.IN", silent=False):
         """
         Write the SELECTOR.IN file.
 
@@ -1033,31 +1050,28 @@ class Model:
         ]
 
         vars_list = [["lWat", "lChem", "lTemp", "lSink", "lRoot", "lShort",
-                      "lWDep", "lScreen", "AtmInf", "lEquil", "lInverse",
-                      "\n"],
-                     ["lSnow", "lHP1", "lMeteo", "lVapor", "lActRSU", "lFlux",
-                      "lIrrig", "\n"]]
+                      "lWDep", "lScreen", "lVariableBC", "lEquil", "lInverse", "\n"],
+                     ["lSnow", "lHP1", "lMeteo", "lVapor", "lActiveU", 
+                     "lFluxes", "lIrrig", "lPart", "lCosmic", "\n"]]
 
         for variables in vars_list:
             lines.append("  ".join(variables))
-            lines.append("  ".join("t" if self.basic_info[var] else "f" for
+            lines.append("  ".join("t      " if self.basic_info[var.strip()] else "f     " for
                                    var in variables[:-1]))
             lines.append("\n")
 
-        lines.append(f"NMat NLay CosAlfa \n{self.n_materials}"
-                     f" {self.n_layers} {self.basic_info['CosAlfa']}\n")
+        lines.append(f"NMat   NLay   CosAlfa\n{self.n_materials}      "
+                     f"{self.n_layers}      {self.basic_info['CosAlfa']}\n")
 
         # Write block B: WATER FLOW INFORMATION
         lines.append(string.format("B: WATER FLOW INFORMATION ", "*", "<", 72))
-        lines.append("MaxIt  TolTh  TolH   (maximum number of iterations and "
+        lines.append("MaxIt  TolTh   TolH   (maximum number of iterations and "
                      "tolerances)\n")
-        variables = ["MaxIt", "TolTh", "TolH"]
-        lines.append(
-            "   ".join([str(self.water_flow[var]) for var in variables]))
+        lines.append("  ".join([f"{self.water_flow[var]} " for var in ("MaxIt", "TolTh", "TolH")]))
         lines.append("\n")
 
-        vars_list = [["TopInf", "WLayer", "KodTop", "lInitW", "\n"],
-                     ["BotInf", "qGWLF", "FreeD", "SeepF", "KodBot", "qDrain",
+        vars_list = [["TopInf", "WLayer", "KodTop", "InitCond", "\n"],
+                     ["BotInf", "qGWLF", "FreeD", "SeepF", "KodBot", "DrainF",
                       "hSeep", "\n"]]
 
         upper_condition = (self.water_flow["KodTop"] < 0
@@ -1075,10 +1089,10 @@ class Model:
         if self.water_flow["qGWLF"]:
             vars_list.append(["GWL0L", "Aqh", "Bqh", "\n"])
 
-        vars_list.append(["ha", "hb", "\n"])
-        vars_list.append(["iModel", "iHyst", "\n"])
+        vars_list.append(["hTab1", "hTabN", "\n"])
+        vars_list.append(["Model", "Hysteresis", "\n"])
 
-        if self.water_flow["iHyst"] > 0:
+        if self.water_flow["Hysteresis"] > 0:
             vars_list.append(["iKappa", "\n"])
 
         for variables in vars_list:
@@ -1087,11 +1101,11 @@ class Model:
             for var in variables[:-1]:
                 val = self.water_flow[var]
                 if val is True:
-                    values.append("t")
+                    values.append("t      ")
                 elif val is False:
-                    values.append("f")
+                    values.append("f      ")
                 else:
-                    values.append(f"{val}")
+                    values.append(f"{val}      ")
             values.append("\n")
             lines.append(" ".join(values))
 
@@ -1106,7 +1120,7 @@ class Model:
         # Write BLOCK C: TIME INFORMATION
         lines.append(string.format("C: TIME INFORMATION ", "*", "<", 72))
         vars_list = [
-            ["dt", "dtMin", "dtMax", "dMul", "dMul2", "ItMin", "ItMax",
+            ["dt", "dtMin", "dtMax", "DMul", "DMul2", "ItMin", "ItMax",
              "MPL", "\n"], ["tInit", "tMax", "\n"],
             ["lPrint", "nPrintSteps", "tPrintInterval", "lEnter", "\n"]]
         for variables in vars_list:
@@ -1124,7 +1138,7 @@ class Model:
             lines.append(" ".join(values))
 
         lines.append("TPrint(1),TPrint(2),...,TPrint(MPL)\n")
-        for i in range(int(len(self.times) / 6) + 1):
+        for i in range(int(len(self.times) / 6.001) + 1):
             lines.append(
                 " ".join([str(time) for time in self.times[i * 6:i * 6 + 6]]))
             lines.append("\n")
@@ -1163,12 +1177,12 @@ class Model:
         if self.basic_info["lChem"]:
             lines.append(string.format("F: SOLUTE TRANSPORT INFORMATION ",
                                        "*", "<", 72))
-            lines.append(" Epsi lUpW lArtD lTDep cTolA cTolR MaxItC PeCr "
+            lines.append("Epsi lUpW lArtD ltDep cTolA cTolR MaxItC PeCr "
                          "No.Solutes lTort iBacter lFiltr nChPar\n"
                          "{} {} {} {} {} {} {} {} {} {} {} {} {}\n"
                          "iNonEqul lWatDep lDualNEq lInitM lInitEq lTort "
-                         "lDummy lDummy lDummy lDummy lCFTr\n"
-                         "{} {} {} {} {} {} f f f f f\n".format(
+                         "lHP1BC lFumigant lPFAS lSurfact lCFTr\n"
+                         "{} {} {} {} {} {} {} {} {} {} {}\n".format(
                 self.solute_transport["Epsi"],
                 "t" if self.solute_transport["lUpW"] else "f",
                 "t" if self.solute_transport["lArtD"] else "f",
@@ -1186,7 +1200,12 @@ class Model:
                 "t" if self.solute_transport["lWatDep"] else "f",
                 "t" if self.solute_transport["lDualEq"] else "f",
                 "f", "f",
-                "t" if self.solute_transport["lTort"] else "f"
+                "t" if self.solute_transport["lTort"] else "f",
+                "t" if self.solute_transport["lHP1BC"] else "f",
+                "t" if self.solute_transport["lFumigant"] else "f",
+                "t" if self.solute_transport["lPFAS"] else "f",
+                "t" if self.solute_transport["lSurfact"] else "f",
+                "t" if self.solute_transport["lCFTr"] else "f"
             ))
 
             # Write the material parameters
@@ -1258,9 +1277,10 @@ class Model:
         with open(fname, "w") as file:
             file.writelines(lines)
 
-        self.logger.info("Successfully wrote %s", fname)
+        if silent == False:
+            self.logger.info("Successfully wrote %s", fname)
 
-    def write_atmosphere(self, fname="ATMOSPH.IN"):
+    def write_atmosphere(self, fname="ATMOSPH.IN", silent=False):
         """
         Method to write the ATMOSPH.IN file
 
@@ -1278,7 +1298,7 @@ class Model:
                  f"{self.atmosphere.index.size}\n"]
 
         # Print some values
-        vars5 = ["lDailyVar", "lSinusVar", "lLai", "lBCCycles", "lInterc",
+        vars5 = ["DailyVar", "SinusVar", "lLay", "lBCCycles", "lInterc", "lHeadInt",
                  "\n"]
 
         lines.append(" ".join(vars5))
@@ -1305,9 +1325,10 @@ class Model:
         with open(fname, "w") as file:
             file.writelines(lines)
 
-        self.logger.info("Successfully wrote %s", fname)
+        if silent == False:
+            self.logger.info("Successfully wrote %s", fname)
 
-    def write_profile(self, fname="PROFILE.DAT"):
+    def write_profile(self, fname="PROFILE.DAT", silent=False):
         """
         Method to write the PROFILE.DAT file.
 
@@ -1334,17 +1355,17 @@ class Model:
                 [f"\n{len(self.obs_nodes)}\n",
                  "".join(["   {}".format(i) for i in self.obs_nodes])])
 
-        self.logger.info("Successfully wrote %s", fname)
+        if silent == False:
+            self.logger.info("Successfully wrote %s", fname)
 
     def read_profile(self, fname="PROFILE.OUT"):
         path = os.path.join(self.ws_name, fname)
         data = read_profile(path=path)
         return data
 
-    def read_nod_inf(self, fname="NOD_INF.OUT", times=None):
+    def read_nod_inf(self, fname="NOD_INF.OUT"):
         path = os.path.join(self.ws_name, fname)
-        data = read_nod_inf(path=path, times=times)
-        return data
+        return read_nod_inf(path=path)
 
     def read_run_inf(self, fname="RUN_INF.OUT", usecols=None):
         path = os.path.join(self.ws_name, fname)
@@ -1376,7 +1397,7 @@ class Model:
             if self.CO2Transport is not None:
                 usecols += ["COVol", "COMean", "CO2BalT", "CncBalT"]
 
-            if self.water_flow["iModel"] in [5, 6, 7]:
+            if self.water_flow["Model"] in [5, 6, 7]:
                 usecols += ["W-VolumeI", "cMeanIm"]
 
         data = read_balance(path=path, usecols=usecols)
@@ -1409,7 +1430,7 @@ class Model:
                        "sum(vBot)", "hTop", "hRoot", "hBot", "RunOff",
                        "Volume"]
 
-            if self.water_flow["iModel"] > 4:
+            if self.water_flow["Model"] > 4:
                 usecols.append("Cum(WTrans)")
             if self.basic_info["lSnow"]:
                 usecols.append("SnowLayer")
@@ -1469,12 +1490,12 @@ class Model:
             9: list(range(17))
         }
 
-        level2 = models[self.water_flow["iModel"]]
+        level2 = models[self.water_flow["Model"]]
         level1 = ["water"] * len(level2)
 
         if self.solute_transport is not None:
             models = {
-                0: ["bulk.d", "DisperL", "frac", "mobile_wc"],
+                0: ["Bulk.d", "DisperL.", "Frac", "Mobile WC"],
                 1: [],
                 2: [],
                 3: [],
